@@ -79,6 +79,7 @@ Just clone the repository and install the dependencies:
 
 ```sh
 git clone https://github.com/RaghavanSV/Tmux-MCP.git
+cd 'Tmux-MCP'
 pip install -r requirements.txt
 ```
 
