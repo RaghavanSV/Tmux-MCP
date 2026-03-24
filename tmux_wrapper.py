@@ -8,8 +8,11 @@ Command execution functions integrate with the guardrails module.
 
 import asyncio
 from dataclasses import dataclass
-
 from guardrails import validate_command
+import re
+
+#To wait untill the command gets finished.
+PROMPT_RE = re.compile(r'(\$|#|>)\s*$', re.MULTILINE)
 
 
 @dataclass
@@ -143,10 +146,12 @@ async def kill_pane(session: str, window: int, pane: int) -> TmuxResult:
 async def send_keys(
     session: str, window: int, pane: int,
     keys: str, press_enter: bool = True,
+    timeout: float = 30.0, stable_delay: float = 2.0,
 ) -> TmuxResult:
     """
-    Send keystrokes to a pane. If press_enter is True, the guardrail
-    check is applied first.
+    Send keystrokes to a pane. If press_enter is True:
+     - guardrail check is applied first
+     - waits for pane output to stabilize before returning
     """
     if press_enter:
         check = validate_command(keys)
@@ -160,12 +165,27 @@ async def send_keys(
     args = ["send-keys", "-t", target, keys]
     if press_enter:
         args.append("Enter")
-    return await _run_tmux(*args)
 
+    # Capture baseline BEFORE sending
+    baseline_r = await _run_tmux("capture-pane", "-t", target, "-p")
+    baseline = baseline_r.data if baseline_r.success else ""
 
-async def execute_command(session: str, window: int, pane: int, command: str) -> TmuxResult:
+    # Fire the keystrokes — this returns as soon as tmux daemon ACKs
+    send_r = await _run_tmux(*args)
+    if not send_r.success or not press_enter:
+        # No-enter sends (e.g. Ctrl+C) don't need to wait for output
+        return send_r
+
+    # Poll until output stabilizes (command finished) or timeout
+    return await _wait_for_output(target, baseline, timeout, stable_delay)
+
+async def execute_command(
+    session: str, window: int, pane: int, command: str,
+    timeout: float = 30.0, stable_delay: float = 2.0,
+) -> TmuxResult:
     """
-    Execute a command in a pane (send-keys + Enter) with guardrail validation.
+    Execute a command in a pane with guardrail validation.
+    Waits for command output to stabilize before returning.
     """
     check = validate_command(command)
     if not check.is_safe:
@@ -175,7 +195,69 @@ async def execute_command(session: str, window: int, pane: int, command: str) ->
         )
 
     target = f"{session}:{window}.{pane}"
-    return await _run_tmux("send-keys", "-t", target, command, "Enter")
+
+    # Capture baseline BEFORE sending
+    baseline_r = await _run_tmux("capture-pane", "-t", target, "-p")
+    baseline = baseline_r.data if baseline_r.success else ""
+
+    # Fire the command — returns when tmux ACKs, NOT when command finishes
+    send_r = await _run_tmux("send-keys", "-t", target, command, "Enter")
+    if not send_r.success:
+        return send_r
+
+    # Poll until output stabilizes
+    return await _wait_for_output(target, baseline, timeout, stable_delay)
+
+
+async def _wait_for_output(
+    target: str,
+    baseline: str,
+    timeout: float = 30.0,
+    poll_interval: float = 0.5,
+) -> TmuxResult:
+    """
+    Poll `capture-pane` until a shell prompt reappears in the pane,
+    indicating the command has finished executing.
+    """
+    elapsed = 0.0
+    while elapsed < timeout:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+        cap = await _run_tmux("capture-pane", "-t", target, "-p")
+        current = cap.data if cap.success else ""
+
+        # Wait until output has changed from baseline first
+        if current == baseline:
+            continue
+
+        # Then check if a prompt line has appeared — command is done
+        if PROMPT_RE.search(current):
+            return TmuxResult(
+                success=True,
+                data=_new_output(baseline, current),
+            )
+
+    # Timeout — return whatever we have
+    cap = await _run_tmux("capture-pane", "-t", target, "-p")
+    current = cap.data if cap.success else ""
+    return TmuxResult(
+        success=True,
+        data=_new_output(baseline, current) or current,
+        error=f"Timed out after {timeout}s — output may be incomplete",
+    )
+
+
+def _new_output(baseline: str, current: str) -> str:
+    """Return only the lines in `current` that are new vs `baseline`."""
+    b_lines = baseline.rstrip("\n").split("\n") if baseline.strip() else []
+    c_lines = current.rstrip("\n").split("\n") if current.strip() else []
+    i = 0
+    while i < len(b_lines) and i < len(c_lines) and b_lines[i] == c_lines[i]:
+        i += 1
+    new = c_lines[i:]
+    while new and not new[-1].strip():
+        new.pop()
+    return "\n".join(new)
 
 
 async def capture_pane(
