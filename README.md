@@ -31,7 +31,7 @@
 
 # Introduction
 
-Post-Exploitation tmux MCP is a **Model Context Protocol** server that exposes essential [tmux](https://github.com/tmux/tmux) features as MCP tools — giving AI agents a fully-featured terminal multiplexer for post-exploitation operations. Every command is validated through **built-in guardrails** that block destructive system commands before they execute. Built with [FastMCP](https://github.com/jlowin/fastmcp), it lets any MCP-compatible client (AI agents, automation frameworks, etc.) create sessions, spawn windows, split panes, and run commands — all while preventing accidental or malicious system damage.
+Tmux-MCP is a **Model Context Protocol** server that exposes essential [tmux](https://github.com/tmux/tmux) features as MCP tools — giving AI agents a fully-featured terminal multiplexer for post-exploitation operations. Every command is validated through **built-in guardrails** that block destructive system commands before they execute. Built with [FastMCP](https://github.com/jlowin/fastmcp), it lets any MCP-compatible client (AI agents, automation frameworks, etc.) create sessions, spawn windows, split panes, and run commands — all while preventing accidental or malicious system damage.
 
 # Features
 
